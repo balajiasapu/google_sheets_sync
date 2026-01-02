@@ -1,52 +1,55 @@
-# 📊 Google Sheets Sync - Secure Backend Proxy Pattern
+# 📊 Google Sheets Sync - Generic Backend Proxy
 
-> A privacy-first, reusable backend proxy pattern for syncing application data to Google Sheets using OAuth 2.0.
+> A domain-agnostic, serverless solution for syncing any app data to Google Sheets using OAuth 2.0 and backend proxy architecture.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
 [![Vercel](https://img.shields.io/badge/Deploy-Vercel-black)](https://vercel.com)
+[![Platform Agnostic](https://img.shields.io/badge/platform-agnostic-blue)](README.md)
 
 ---
 
 ## 🎯 Overview
 
-**Google Sheets Sync** is a secure, privacy-preserving synchronization system that enables mobile and web applications to sync user data to Google Sheets without exposing OAuth secrets in client code. Built on the **Backend Proxy Pattern**, it ensures enterprise-grade security while maintaining a seamless user experience.
+**Google Sheets Sync** is a **domain-agnostic** synchronization system that enables any application to sync data to Google Sheets without exposing OAuth secrets in client code. Built on the **Backend Proxy Pattern**, it works with nutrition trackers, expense managers, fitness apps, or any data logging application.
 
 ### Key Features
 
-✅ **Zero Secrets in Client Code** - OAuth credentials stored server-side only  
+✅ **Domain Agnostic** - Works with any data structure  
+✅ **Zero Secrets in Client Code** - OAuth credentials server-side only  
 ✅ **Privacy-First** - Pass-through architecture, no data retention  
 ✅ **OAuth 2.0 Compliant** - Industry-standard authentication  
 ✅ **Rate Limited** - Prevents abuse (100 req/hour/user)  
 ✅ **Serverless** - Auto-scaling, pay-per-request  
-✅ **User Ownership** - Data lives in user's Google Drive  
-✅ **One-Tap Setup** - No manual configuration for end users  
+✅ **Platform Independent** - Web, mobile, desktop  
 
 ---
 ## Why this exists
 
 Many small teams and individual builders want the simplicity of Google Sheets without leaking credentials, storing personal data, or standing up a full backend.
 This project documents a clean, reusable pattern for doing exactly that.
+
 ---
 
 ## 🏗️ Architecture
 
 ```
 ┌─────────────────┐
-│   Mobile App    │
-│   (Android/iOS) │
+│   Any App       │
+│ (Web/Mobile/PWA)│
 └────────┬────────┘
          │ 1. User signs in with Google
          │ 2. Gets OAuth access token
          ▼
 ┌─────────────────┐
-│  SyncService.js │ (Client-side)
+│  Your Client    │ (Platform-specific OAuth)
+│  Code           │
 └────────┬────────┘
-         │ 3. POST { accessToken, data }
+         │ 3. POST { accessToken, sheetConfig, rowData }
          │    via HTTPS
          ▼
 ┌─────────────────┐
-│ Vercel Function │ (Backend Proxy)
+│ Vercel Function │ (Generic Backend Proxy)
 │   sync.js       │
 └────────┬────────┘
          │ 4. Validates token with Google
@@ -57,15 +60,7 @@ This project documents a clean, reusable pattern for doing exactly that.
 │ (User's Drive)  │
 └─────────────────┘
 ```
-
-### Security Flow
-
-1. **Client** obtains OAuth token via Google Sign-In
-2. **Client** sends token + data to backend (HTTPS)
-3. **Backend** validates token with Google's `tokeninfo` endpoint
-4. **Backend** uses validated token to write to user's Sheet
-5. **Backend** returns success/failure (no data stored)
-
+OAuth authentication is handled entirely on the client using platform-appropriate Google Identity SDKs. The backend never initiates OAuth flows.
 ---
 
 ## 🚀 Quick Start
@@ -75,7 +70,9 @@ This project documents a clean, reusable pattern for doing exactly that.
 - Node.js 18+
 - Vercel account (free tier)
 - Google Cloud project with Sheets API enabled
-- OAuth 2.0 credentials (Web + Android/iOS)
+- OAuth 2.0 credentials (Web Client ID + Secret)
+
+**Note:** Client OAuth implementation varies by platform (see [Client Integration](#-client-integration)).
 
 ### 1. Clone & Install
 
@@ -95,6 +92,10 @@ GOOGLE_CLIENT_SECRET=your-web-client-secret
 ALLOWED_ORIGIN=*
 ```
 
+> ⚠️ **Security Note:**  
+> - `GOOGLE_CLIENT_ID` is **public** (safe to expose in client code)  
+> - `GOOGLE_CLIENT_SECRET` is **private** (NEVER expose to client)
+
 ### 3. Deploy to Vercel
 
 ```bash
@@ -113,132 +114,89 @@ vercel secrets add allowed-origin "*"
 
 ### 5. Get Your Endpoint
 
-After deployment, you'll receive a URL like:
+After deployment:
 ```
 https://your-app.vercel.app/api/sync
 ```
 
 ---
 
-## 📱 Client Integration
+## 📊 Generic Data Schema
 
-### Install Dependencies
-
-```bash
-npm install @codetrix-studio/capacitor-google-auth
-```
-
-### Client-Side Code
-
-```javascript
-import SyncService from './SyncService.js';
-
-// Enable sync
-SyncService.setSyncEnabled(true);
-
-// Sync a meal/data event
-const result = await SyncService.syncMeal({
-  timestamp: new Date().toISOString(),
-  parsedData: {
-    items: [
-      {
-        name: "Apple",
-        quantity: "1 medium",
-        nutrients: {
-          calories: 52,
-          protein: 0.3,
-          carbs: 14,
-          fat: 0.2
-        }
-      }
-    ]
-  }
-});
-
-if (result.success) {
-  console.log('Synced to Google Sheets!');
-}
-```
-
-### Android Configuration
-
-In [android/app/src/main/res/values/strings.xml](file:///C:/Users/balaj/Desktop/Personal/Ideas/Nutrition%20App/Antigravity/android/app/src/main/res/values/strings.xml):
-
-```xml
-<string name="server_client_id">YOUR_WEB_CLIENT_ID.apps.googleusercontent.com</string>
-```
-
----
-
-## 🔒 Security Features
-
-### Token Validation
-
-Every request validates the OAuth token with Google:
-
-```javascript
-const tokenInfo = await fetch(
-  `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${token}`
-);
-```
-
-### Rate Limiting
-
-Built-in rate limiting prevents abuse:
-
-- **100 requests/hour** per user
-- Configurable via environment variables
-- In-memory store (upgradeable to Redis)
-
-### CORS Protection
-
-Configurable allowed origins:
-
-```javascript
-res.setHeader('Access-Control-Allow-Origin', process.env.ALLOWED_ORIGIN);
-```
-
-### No Data Retention
-
-The backend is a **pass-through proxy**:
-- ❌ No database
-- ❌ No logging of user data
-- ❌ No analytics tracking
-- ✅ Immediate write to user's Sheet
-
----
-
-## 📊 Data Schema
-
-### Request Format
+### Request Format (Domain Agnostic)
 
 ```json
 {
   "accessToken": "ya29.a0AfH6...",
-  "nutritionData": {
-    "date": "01/01/2026",
-    "time": "1:11 PM",
-    "items": [
-      {
-        "name": "Chicken Breast",
-        "quantity": "150g",
-        "calories": 165,
-        "protein": 31,
-        "carbs": 0,
-        "fat": 3.6,
-        "notes": "Grilled"
-      }
-    ],
-    "userId": "user_abc123xyz"
-  }
+  "sheetConfig": {
+    "sheetName": "My Data Log",
+    "headers": ["Date", "Category", "Amount", "Notes"]
+  },
+  "rowData": [
+    ["2026-01-01", "Groceries", 45.67, "Whole Foods"],
+    ["2026-01-01", "Transport", 12.50, "Uber"]
+  ]
 }
 ```
 
-### Google Sheet Structure
+**Fields:**
+- `accessToken` (string, required) - OAuth access token
+- `sheetConfig` (object, required)
+  - `sheetName` (string) - Name of spreadsheet to create/update
+  - `headers` (array) - Column headers (created if sheet doesn't exist)
+- `rowData` (array of arrays, required) - Rows to append
 
-| Date | Time | Food | Quantity | Calories | Protein (g) | Carbs (g) | Fat (g) | Notes | User ID |
-|------|------|------|----------|----------|-------------|-----------|---------|-------|---------|
-| 01/01/2026 | 1:11 PM | Chicken Breast | 150g | 165 | 31 | 0 | 3.6 | Grilled | user_abc123 |
+---
+
+## 🎯 Domain-Specific Examples
+
+### Nutrition Tracker
+
+```json
+{
+  "accessToken": "ya29...",
+  "sheetConfig": {
+    "sheetName": "Nutrition Log",
+    "headers": ["Date", "Time", "Food", "Calories", "Protein", "Carbs", "Fat"]
+  },
+  "rowData": [
+    ["2026-01-01", "8:00 AM", "Oatmeal", 150, 5, 27, 3],
+    ["2026-01-01", "12:30 PM", "Chicken Salad", 350, 35, 10, 15]
+  ]
+}
+```
+
+### Expense Tracker
+
+```json
+{
+  "accessToken": "ya29...",
+  "sheetConfig": {
+    "sheetName": "Expenses 2026",
+    "headers": ["Date", "Category", "Amount", "Vendor", "Payment Method"]
+  },
+  "rowData": [
+    ["2026-01-01", "Food", 45.67, "Whole Foods", "Credit Card"],
+    ["2026-01-01", "Transport", 12.50, "Uber", "Debit Card"]
+  ]
+}
+```
+
+### Fitness Tracker
+
+```json
+{
+  "accessToken": "ya29...",
+  "sheetConfig": {
+    "sheetName": "Workouts",
+    "headers": ["Date", "Exercise", "Duration (min)", "Calories Burned", "Heart Rate"]
+  },
+  "rowData": [
+    ["2026-01-01", "Running", 30, 300, 145],
+    ["2026-01-01", "Cycling", 45, 400, 135]
+  ]
+}
+```
 
 ---
 
@@ -257,22 +215,14 @@ Content-Type: application/json
 ```json
 {
   "accessToken": "string (required)",
-  "nutritionData": {
-    "date": "string (required)",
-    "time": "string (optional)",
-    "items": [
-      {
-        "name": "string (required)",
-        "quantity": "string (optional)",
-        "calories": "number (required)",
-        "protein": "number (optional)",
-        "carbs": "number (optional)",
-        "fat": "number (optional)",
-        "notes": "string (optional)"
-      }
-    ],
-    "userId": "string (optional)"
-  }
+  "sheetConfig": {
+    "sheetName": "string (required)",
+    "headers": ["string", "..."] (required)
+  },
+  "rowData": [
+    ["value1", "value2", "..."],
+    ["value1", "value2", "..."]
+  ] (required)
 }
 ```
 
@@ -281,7 +231,8 @@ Content-Type: application/json
 {
   "success": true,
   "message": "Data synced successfully",
-  "rowsAdded": 1
+  "rowsAdded": 2,
+  "spreadsheetId": "abc123..."
 }
 ```
 
@@ -290,9 +241,90 @@ Content-Type: application/json
 | Code | Error | Description |
 |------|-------|-------------|
 | 400 | `missing_fields` | Required fields missing |
+| 400 | `invalid_schema` | Headers/rowData mismatch |
 | 401 | `invalid_token` | Token invalid or expired |
 | 429 | `rate_limit_exceeded` | Too many requests |
 | 500 | `server_error` | Internal server error |
+
+---
+
+## 📱 Client Integration
+
+### Platform-Specific OAuth Implementations
+
+#### Option 1: Capacitor/Ionic (Mobile Apps)
+
+```bash
+npm install @codetrix-studio/capacitor-google-auth
+```
+
+```javascript
+import { GoogleAuth } from '@codetrix-studio/capacitor-google-auth';
+
+// Get access token
+const result = await GoogleAuth.signIn();
+const accessToken = result.authentication.accessToken;
+
+// Sync data
+await syncToSheets(accessToken, sheetConfig, rowData);
+```
+
+#### Option 2: Web (React/Vue/Angular)
+
+```html
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+```
+
+```javascript
+// Initialize Google Sign-In
+google.accounts.id.initialize({
+  client_id: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com',
+  callback: handleCredentialResponse
+});
+
+function handleCredentialResponse(response) {
+  const accessToken = response.credential;
+  syncToSheets(accessToken, sheetConfig, rowData);
+}
+```
+---
+
+Note: Google One Tap returns an ID token, not an OAuth access token. To access the Sheets API, use Google Identity Services OAuth token flow (initTokenClient) instead.
+
+---
+
+#### Option 3: PWA (Progressive Web App)
+
+```javascript
+// Use Google Identity Services
+const client = google.accounts.oauth2.initTokenClient({
+  client_id: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com',
+  scope: 'https://www.googleapis.com/auth/spreadsheets',
+  callback: (tokenResponse) => {
+    syncToSheets(tokenResponse.access_token, sheetConfig, rowData);
+  }
+});
+
+client.requestAccessToken();
+```
+
+### Generic Sync Function
+
+```javascript
+async function syncToSheets(accessToken, sheetConfig, rowData) {
+  const response = await fetch('https://your-app.vercel.app/api/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      accessToken,
+      sheetConfig,
+      rowData
+    })
+  });
+  
+  return await response.json();
+}
+```
 
 ---
 
@@ -306,27 +338,145 @@ npm run dev
 
 Test endpoint: `http://localhost:3000/api/sync`
 
+### Get a Test Access Token
+
+**Option 1: OAuth 2.0 Playground** (Recommended)
+
+1. Go to [Google OAuth 2.0 Playground](https://developers.google.com/oauthplayground/)
+2. Click ⚙️ (settings) → Check "Use your own OAuth credentials"
+3. Enter your Client ID and Client Secret
+4. Select scopes:
+   - `https://www.googleapis.com/auth/spreadsheets`
+   - `https://www.googleapis.com/auth/drive.file`
+5. Click "Authorize APIs"
+6. Click "Exchange authorization code for tokens"
+7. Copy the **Access token**
+
+**Option 2: Mock Mode** (Development Only)
+
+Set `MOCK_MODE=true` in `.env` to bypass token validation:
+
+```bash
+MOCK_MODE=true
+```
+
+> ⚠️ **Never use mock mode in production!**
+
+---
+Mock mode is disabled by default and should only be enabled in local development environments.
+---
+
 ### Test with cURL
 
 ```bash
 curl -X POST http://localhost:3000/api/sync \
   -H "Content-Type: application/json" \
   -d '{
-    "accessToken": "YOUR_TEST_TOKEN",
-    "nutritionData": {
-      "date": "01/01/2026",
-      "time": "1:11 PM",
-      "items": [{
-        "name": "Test Food",
-        "quantity": "100g",
-        "calories": 100,
-        "protein": 10,
-        "carbs": 10,
-        "fat": 5
-      }],
-      "userId": "test_user"
-    }
+    "accessToken": "YOUR_ACCESS_TOKEN_FROM_PLAYGROUND",
+    "sheetConfig": {
+      "sheetName": "Test Log",
+      "headers": ["Date", "Category", "Value"]
+    },
+    "rowData": [
+      ["2026-01-01", "Test", "123"]
+    ]
   }'
+```
+
+### Postman Collection
+
+Import the [Postman Collection](postman/google-sheets-sync.json) for pre-configured requests.
+
+---
+
+## 🔒 Security Model
+
+### OAuth Credentials Explained
+
+| Credential | Public/Private | Where It Lives | Purpose | Risk if Exposed |
+|------------|----------------|----------------|---------|-----------------|
+| **Client ID** | ✅ Public | Client code, network requests, HTML | Identifies your app to Google | **Low** - Just identifies your app |
+| **Client Secret** | 🔒 Private | Server environment variables ONLY | Proves your server is authorized | **CRITICAL** - Full account access |
+
+### Why This Architecture is Secure
+
+1. **Client Secret Never Leaves Server**
+   - Stored in Vercel environment variables
+   - Never sent to client
+   - Never logged
+
+2. **Token Validation**
+   - Every request validates token with Google
+   - Expired tokens rejected
+   - Invalid tokens rejected
+
+3. **No Data Retention**
+   - Backend is a pass-through proxy
+   - No database
+   - No logging of user data
+
+4. **Rate Limiting**
+   - 100 requests/hour per user
+   - Prevents abuse
+   - Configurable
+
+---
+Rate limiting is currently enforced per access token and IP address. This can be customized based on application needs.
+---
+
+## 🔧 Backend Implementation
+
+### Generic Sync Handler
+
+```javascript
+async function appendToSheet(sheets, auth, spreadsheetId, sheetConfig, rowData) {
+  // Ensure sheet exists with correct headers
+  await ensureSheetExists(sheets, auth, spreadsheetId, sheetConfig);
+  
+  // Append rows
+  const response = await sheets.spreadsheets.values.append({
+    auth,
+    spreadsheetId,
+    range: `${sheetConfig.sheetName}!A:Z`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: {
+      values: rowData
+    }
+  });
+  
+  return { rowsAdded: rowData.length };
+}
+```
+
+### Domain Adapter Pattern (Optional)
+
+Domain adapters allow you to keep business logic out of your sync layer, making this capability reusable across apps.
+
+For domain-specific apps, create an adapter:
+
+```javascript
+// nutrition-adapter.js
+export function toSheetFormat(nutritionEvent) {
+  return {
+    sheetConfig: {
+      sheetName: 'Nutrition Log',
+      headers: ['Date', 'Time', 'Food', 'Calories', 'Protein', 'Carbs', 'Fat']
+    },
+    rowData: nutritionEvent.items.map(item => [
+      nutritionEvent.date,
+      nutritionEvent.time,
+      item.name,
+      item.calories,
+      item.protein,
+      item.carbs,
+      item.fat
+    ])
+  };
+}
+
+// Usage
+const sheetData = toSheetFormat(nutritionEvent);
+await syncToSheets(accessToken, sheetData.sheetConfig, sheetData.rowData);
 ```
 
 ---
@@ -340,74 +490,38 @@ curl -X POST http://localhost:3000/api/sync \
 - **Token validation:** ~100ms
 - **Sheets API write:** ~300ms
 
+Benchmarks are indicative and may vary based on region, Google API latency, and cold starts.
+
 ### Scalability
 
-- **Auto-scaling:** Handles traffic spikes automatically
-- **Rate limiting:** Prevents abuse
+- **Auto-scaling:** Handles traffic spikes
+- **Rate limiting:** 100 req/hour/user (configurable)
 - **Serverless:** No server management
 - **Cost:** Free tier covers most use cases
 
 ---
 
-## 🔧 Configuration
-
-### Environment Variables
-
-| Variable | Description | Required | Default |
-|----------|-------------|----------|---------|
-| `GOOGLE_CLIENT_ID` | OAuth Web Client ID | Yes | - |
-| `GOOGLE_CLIENT_SECRET` | OAuth Client Secret | Yes | - |
-| `ALLOWED_ORIGIN` | CORS allowed origin | No | `*` |
-| `RATE_LIMIT_PER_HOUR` | Requests per hour | No | `100` |
-
-### Customization
-
-**Change rate limit:**
-```javascript
-const RATE_LIMIT = process.env.RATE_LIMIT_PER_HOUR || 100;
-```
-
-**Change sheet name:**
-```javascript
-const SHEET_NAME = process.env.SHEET_NAME || 'Antigravity Nutrition Log';
-```
-
-**Add custom columns:**
-```javascript
-// In findOrCreateSpreadsheet()
-values: [
-  { userEnteredValue: { stringValue: 'Date' } },
-  { userEnteredValue: { stringValue: 'Custom Field' } },
-  // ...
-]
-```
-
----
-
 ## 🤝 Contributing
 
-Contributions are welcome! Please follow these guidelines:
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+### Adding Domain Adapters
 
-### Development Setup
+Create adapters for common use cases:
 
-```bash
-git clone https://github.com/yourusername/google-sheets-sync.git
-cd google-sheets-sync
-npm install
-npm run dev
+```
+adapters/
+├── nutrition-adapter.js
+├── expense-adapter.js
+├── fitness-adapter.js
+└── todo-adapter.js
 ```
 
 ---
 
 ## 📝 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
@@ -415,8 +529,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - Built with [Vercel](https://vercel.com) serverless functions
 - Uses [Google Sheets API](https://developers.google.com/sheets/api)
-- OAuth 2.0 implementation via [Google OAuth](https://developers.google.com/identity/protocols/oauth2)
-- Inspired by privacy-first design principles
+- OAuth 2.0 via [Google OAuth](https://developers.google.com/identity/protocols/oauth2)
 
 ---
 
@@ -429,22 +542,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🗺️ Roadmap
 
-- [ ] Add Redis support for rate limiting
-- [ ] Support for multiple spreadsheets
+- [x] Generic data schema
+- [x] Domain-agnostic API
+- [ ] TypeScript support
+- [ ] Redis rate limiting
 - [ ] Batch sync API
 - [ ] Webhook notifications
-- [ ] TypeScript support
-- [ ] Docker deployment option
-- [ ] Offline queue with retry logic
-
----
-
-## 📊 Stats
-
-![GitHub stars](https://img.shields.io/github/stars/yourusername/google-sheets-sync?style=social)
-![GitHub forks](https://img.shields.io/github/forks/yourusername/google-sheets-sync?style=social)
-![GitHub issues](https://img.shields.io/github/issues/yourusername/google-sheets-sync)
-![GitHub pull requests](https://img.shields.io/github/issues-pr/yourusername/google-sheets-sync)
+- [ ] Multiple spreadsheet support
+- [ ] Domain adapter library
 
 ---
 
@@ -455,11 +560,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 📚 Additional Resources
 
 - [OAuth Setup Guide](docs/oauth-setup.md)
-- [Deployment Checklist](docs/deployment.md)
-- [Troubleshooting Guide](docs/troubleshooting.md)
-- [API Documentation](docs/api.md)
+- [Client Integration Examples](docs/client-integration.md)
+- [Domain Adapters](docs/adapters.md)
 - [Security Best Practices](docs/security.md)
+- [Troubleshooting Guide](docs/troubleshooting.md)
 
 ---
 
 **⭐ If you find this useful, please star the repository!**
+
