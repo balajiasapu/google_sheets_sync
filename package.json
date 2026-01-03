@@ -1,0 +1,40 @@
+{
+    "name": "google-sheets-sync",
+    "version": "1.0.0",
+    "description": "Domain-agnostic backend proxy for syncing app data to Google Sheets using OAuth 2.0",
+    "main": "api/sync.js",
+    "type": "commonjs",
+    "scripts": {
+        "dev": "vercel dev",
+        "deploy": "vercel --prod"
+    },
+    "keywords": [
+        "google-sheets",
+        "oauth2",
+        "sync",
+        "serverless",
+        "vercel",
+        "backend-proxy",
+        "privacy-first",
+        "domain-agnostic"
+    ],
+    "author": "Balaji Asapu <basapu@umich.edu>",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/balajiasapu/google_sheets_sync.git"
+    },
+    "bugs": {
+        "url": "https://github.com/balajiasapu/google_sheets_sync/issues"
+    },
+    "homepage": "https://github.com/balajiasapu/google_sheets_sync#readme",
+    "dependencies": {
+        "googleapis": "^134.0.0"
+    },
+    "devDependencies": {
+        "vercel": "^33.0.0"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    }
+}
