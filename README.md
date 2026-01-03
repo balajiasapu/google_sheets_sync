@@ -11,7 +11,7 @@
 
 ## 🎯 Overview
 
-**Google Sheets Sync** is a **domain-agnostic** synchronization system that enables any application to sync data to Google Sheets without exposing OAuth secrets in client code. Built on the **Backend Proxy Pattern**, it works with nutrition trackers, expense managers, fitness apps, or any data logging application.
+**Google Sheets Sync** is a **domain-agnostic** synchronization system that enables any application to sync data to Google Sheets without exposing OAuth secrets in client code. Works with nutrition trackers, expense managers, fitness apps, activity logs, or any data logging application.
 
 ### Key Features
 
@@ -21,9 +21,10 @@
 ✅ **OAuth 2.0 Compliant** - Industry-standard authentication  
 ✅ **Rate Limited** - Prevents abuse (100 req/hour/user)  
 ✅ **Serverless** - Auto-scaling, pay-per-request  
-✅ **Platform Independent** - Web, mobile, desktop  
+✅ **Unlimited Columns** - Supports A-Z, AA-ZZ, AAA-ZZZ, etc.  
 
 ---
+
 ## Why this exists
 
 Many small teams and individual builders want the simplicity of Google Sheets without leaking credentials, storing personal data, or standing up a full backend.
@@ -60,7 +61,7 @@ This project documents a clean, reusable pattern for doing exactly that.
 │ (User's Drive)  │
 └─────────────────┘
 ```
-OAuth authentication is handled entirely on the client using platform-appropriate Google Identity SDKs. The backend never initiates OAuth flows.
+**Note:** OAuth authentication is handled entirely on the client using platform-appropriate Google Identity SDKs. The backend never initiates OAuth flows.
 ---
 
 ## 🚀 Quick Start
@@ -129,12 +130,12 @@ https://your-app.vercel.app/api/sync
 {
   "accessToken": "ya29.a0AfH6...",
   "sheetConfig": {
-    "sheetName": "My Data Log",
-    "headers": ["Date", "Category", "Amount", "Notes"]
+    "sheetName": "App Logs",
+    "headers": ["Date", "User", "Action", "Status"]
   },
   "rowData": [
-    ["2026-01-01", "Groceries", 45.67, "Whole Foods"],
-    ["2026-01-01", "Transport", 12.50, "Uber"]
+    ["2026-01-03", "User123", "Login", "Success"],
+    ["2026-01-03", "User123", "Upload", "Failed"]
   ]
 }
 ```
@@ -145,6 +146,7 @@ https://your-app.vercel.app/api/sync
   - `sheetName` (string) - Name of spreadsheet to create/update
   - `headers` (array) - Column headers (created if sheet doesn't exist)
 - `rowData` (array of arrays, required) - Rows to append
+  - Each row must have same length as `headers`
 
 ---
 
@@ -160,8 +162,8 @@ https://your-app.vercel.app/api/sync
     "headers": ["Date", "Time", "Food", "Calories", "Protein", "Carbs", "Fat"]
   },
   "rowData": [
-    ["2026-01-01", "8:00 AM", "Oatmeal", 150, 5, 27, 3],
-    ["2026-01-01", "12:30 PM", "Chicken Salad", 350, 35, 10, 15]
+    ["2026-01-03", "8:00 AM", "Oatmeal", 150, 5, 27, 3],
+    ["2026-01-03", "12:30 PM", "Chicken Salad", 350, 35, 10, 15]
   ]
 }
 ```
@@ -176,8 +178,8 @@ https://your-app.vercel.app/api/sync
     "headers": ["Date", "Category", "Amount", "Vendor", "Payment Method"]
   },
   "rowData": [
-    ["2026-01-01", "Food", 45.67, "Whole Foods", "Credit Card"],
-    ["2026-01-01", "Transport", 12.50, "Uber", "Debit Card"]
+    ["2026-01-03", "Food", 45.67, "Whole Foods", "Credit Card"],
+    ["2026-01-03", "Transport", 12.50, "Uber", "Debit Card"]
   ]
 }
 ```
@@ -192,8 +194,24 @@ https://your-app.vercel.app/api/sync
     "headers": ["Date", "Exercise", "Duration (min)", "Calories Burned", "Heart Rate"]
   },
   "rowData": [
-    ["2026-01-01", "Running", 30, 300, 145],
-    ["2026-01-01", "Cycling", 45, 400, 135]
+    ["2026-01-03", "Running", 30, 300, 145],
+    ["2026-01-03", "Cycling", 45, 400, 135]
+  ]
+}
+```
+
+### Activity Logger
+
+```json
+{
+  "accessToken": "ya29...",
+  "sheetConfig": {
+    "sheetName": "User Activity",
+    "headers": ["Timestamp", "User ID", "Action", "IP Address", "Status"]
+  },
+  "rowData": [
+    ["2026-01-03 14:30:00", "user_123", "Login", "192.168.1.1", "Success"],
+    ["2026-01-03 14:31:15", "user_123", "View Dashboard", "192.168.1.1", "Success"]
   ]
 }
 ```
@@ -226,6 +244,11 @@ Content-Type: application/json
 }
 ```
 
+**Validation Rules:**
+- All rows in `rowData` must have same length as `headers`
+- `sheetName` must be a valid spreadsheet name
+- `headers` must be a non-empty array
+
 **Success Response (200):**
 ```json
 {
@@ -241,9 +264,9 @@ Content-Type: application/json
 | Code | Error | Description |
 |------|-------|-------------|
 | 400 | `missing_fields` | Required fields missing |
-| 400 | `invalid_schema` | Headers/rowData mismatch |
+| 400 | `invalid_schema` | Headers/rowData mismatch or invalid structure |
 | 401 | `invalid_token` | Token invalid or expired |
-| 429 | `rate_limit_exceeded` | Too many requests |
+| 429 | `rate_limit_exceeded` | Too many requests (100/hour) |
 | 500 | `server_error` | Internal server error |
 
 ---
@@ -287,11 +310,7 @@ function handleCredentialResponse(response) {
   syncToSheets(accessToken, sheetConfig, rowData);
 }
 ```
----
-
-Note: Google One Tap returns an ID token, not an OAuth access token. To access the Sheets API, use Google Identity Services OAuth token flow (initTokenClient) instead.
-
----
+**Note:** Google One Tap returns an ID token, not an OAuth access token. To access the Sheets API, use Google Identity Services OAuth token flow (initTokenClient) instead.
 
 #### Option 3: PWA (Progressive Web App)
 
@@ -322,7 +341,13 @@ async function syncToSheets(accessToken, sheetConfig, rowData) {
     })
   });
   
-  return await response.json();
+  const result = await response.json();
+  
+  if (!result.success) {
+    throw new Error(result.message);
+  }
+  
+  return result;
 }
 ```
 
@@ -361,10 +386,7 @@ MOCK_MODE=true
 ```
 
 > ⚠️ **Never use mock mode in production!**
-
----
-Mock mode is disabled by default and should only be enabled in local development environments.
----
+**Note:** Mock mode is disabled by default and should only be enabled in local development environments.
 
 ### Test with cURL
 
@@ -378,14 +400,10 @@ curl -X POST http://localhost:3000/api/sync \
       "headers": ["Date", "Category", "Value"]
     },
     "rowData": [
-      ["2026-01-01", "Test", "123"]
+      ["2026-01-03", "Test", "123"]
     ]
   }'
 ```
-
-### Postman Collection
-
-Import the [Postman Collection](postman/google-sheets-sync.json) for pre-configured requests.
 
 ---
 
@@ -418,66 +436,36 @@ Import the [Postman Collection](postman/google-sheets-sync.json) for pre-configu
 4. **Rate Limiting**
    - 100 requests/hour per user
    - Prevents abuse
-   - Configurable
+   - Configurable via `RATE_LIMIT_PER_HOUR`
 
 ---
-Rate limiting is currently enforced per access token and IP address. This can be customized based on application needs.
----
 
-## 🔧 Backend Implementation
+## ⚠️ Known Limitations
 
-### Generic Sync Handler
+### Rate Limiting (Serverless)
 
-```javascript
-async function appendToSheet(sheets, auth, spreadsheetId, sheetConfig, rowData) {
-  // Ensure sheet exists with correct headers
-  await ensureSheetExists(sheets, auth, spreadsheetId, sheetConfig);
-  
-  // Append rows
-  const response = await sheets.spreadsheets.values.append({
-    auth,
-    spreadsheetId,
-    range: `${sheetConfig.sheetName}!A:Z`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: {
-      values: rowData
-    }
-  });
-  
-  return { rowsAdded: rowData.length };
-}
-```
+The in-memory rate limiter is **"best effort"** in serverless environments. Vercel functions are stateless and may spin up multiple instances, so the rate limit is not strictly enforced.
 
-### Domain Adapter Pattern (Optional)
-
-Domain adapters allow you to keep business logic out of your sync layer, making this capability reusable across apps.
-
-For domain-specific apps, create an adapter:
+**For strict enforcement:** Use Vercel KV or Redis.
 
 ```javascript
-// nutrition-adapter.js
-export function toSheetFormat(nutritionEvent) {
-  return {
-    sheetConfig: {
-      sheetName: 'Nutrition Log',
-      headers: ['Date', 'Time', 'Food', 'Calories', 'Protein', 'Carbs', 'Fat']
-    },
-    rowData: nutritionEvent.items.map(item => [
-      nutritionEvent.date,
-      nutritionEvent.time,
-      item.name,
-      item.calories,
-      item.protein,
-      item.carbs,
-      item.fat
-    ])
-  };
-}
+// Current implementation (best effort)
+const rateLimitStore = new Map(); // In-memory, per-instance
 
-// Usage
-const sheetData = toSheetFormat(nutritionEvent);
-await syncToSheets(accessToken, sheetData.sheetConfig, sheetData.rowData);
+// Production recommendation
+import { kv } from '@vercel/kv';
+const count = await kv.incr(`rate:${userId}`);
 ```
+
+### Column Reordering
+
+⚠️ **Do not manually reorder columns in Google Sheets.** The backend will detect a mismatch and overwrite headers back to the original order defined in `sheetConfig.headers`.
+
+**If you need to change column order:** Update the `sheetConfig.headers` in your client code instead.
+
+### Maximum Columns
+
+Supports unlimited columns (A-Z, AA-ZZ, AAA-ZZZ, etc.) thanks to the [getColumnLetter()] helper function in the backend code.
 
 ---
 
@@ -490,7 +478,7 @@ await syncToSheets(accessToken, sheetData.sheetConfig, sheetData.rowData);
 - **Token validation:** ~100ms
 - **Sheets API write:** ~300ms
 
-Benchmarks are indicative and may vary based on region, Google API latency, and cold starts.
+**Note:** Benchmarks are indicative and may vary based on region, Google API latency, and cold starts.
 
 ### Scalability
 
@@ -514,7 +502,7 @@ adapters/
 ├── nutrition-adapter.js
 ├── expense-adapter.js
 ├── fitness-adapter.js
-└── todo-adapter.js
+└── activity-logger-adapter.js
 ```
 
 ---
@@ -544,16 +532,14 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 - [x] Generic data schema
 - [x] Domain-agnostic API
+- [x] Unlimited column support (A-ZZZ)
+- [x] Mock mode for testing
 - [ ] TypeScript support
-- [ ] Redis rate limiting
+- [ ] Redis/Vercel KV rate limiting
 - [ ] Batch sync API
 - [ ] Webhook notifications
 - [ ] Multiple spreadsheet support
 - [ ] Domain adapter library
-
----
-
-**Built to encourage simple, privacy-conscious data integrations.**
 
 ---
 
@@ -564,8 +550,10 @@ MIT License - see [LICENSE](LICENSE) file for details.
 - [Domain Adapters](docs/adapters.md)
 - [Security Best Practices](docs/security.md)
 - [Troubleshooting Guide](docs/troubleshooting.md)
+- [Bug Fixes Report](docs/bug-fixes.md)
 
 ---
 
 **⭐ If you find this useful, please star the repository!**
 
+---
