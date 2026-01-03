@@ -61,7 +61,9 @@ This project documents a clean, reusable pattern for doing exactly that.
 │ (User's Drive)  │
 └─────────────────┘
 ```
-**Note:** OAuth authentication is handled entirely on the client using platform-appropriate Google Identity SDKs. The backend never initiates OAuth flows.
+**Note:** 
+1. OAuth authentication is handled entirely on the client using platform-appropriate Google Identity SDKs. The backend never initiates OAuth flows.
+2. The core serverless function lives in api/sync.js and can be deployed directly to Vercel.
 ---
 
 ## 🚀 Quick Start
