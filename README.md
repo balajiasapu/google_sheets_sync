@@ -25,6 +25,16 @@
 
 ---
 
+## 📖 Documentation Index
+
+- [🚀 Deployment Guide](google_sheets_sync_deployment.md) - Get up and running in 15 mins
+- [🔒 Security Guide](google_sheets_sync_security.md) - Security model & compliance (GDPR/HIPAA)
+- [📖 API Reference](api.md) - Detailed endpoint documentation
+- [🤝 Contributing](CONTRIBUTING.md) - Guidelines for contributors
+- [🧪 Testing](test/sync.test.js) - Test stubs and procedures
+
+---
+
 ## Why this exists
 
 Many small teams and individual builders want the simplicity of Google Sheets without leaking credentials, storing personal data, or standing up a full backend.
@@ -80,8 +90,8 @@ This project documents a clean, reusable pattern for doing exactly that.
 ### 1. Clone & Install
 
 ```bash
-git clone https://github.com/yourusername/google-sheets-sync.git
-cd google-sheets-sync
+git clone https://github.com/balajiasapu/google_sheets_sync.git
+cd google_sheets_sync
 npm install
 ```
 
@@ -295,23 +305,34 @@ await syncToSheets(accessToken, sheetConfig, rowData);
 ```
 
 #### Option 2: Web (React/Vue/Angular)
-
-```html
-<script src="https://accounts.google.com/gsi/client" async defer></script>
-```
+> [!IMPORTANT]
+> Do not confuse **ID Tokens** (from One Tap/Sign-In) with **Access Tokens**. The Sheets API requires an **Access Token** obtained via the `TokenClient`.
 
 ```javascript
-// Initialize Google Sign-In
-google.accounts.id.initialize({
+// 1. Initialize Token Client for Access Tokens (Required for Sheets)
+const client = google.accounts.oauth2.initTokenClient({
   client_id: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com',
-  callback: handleCredentialResponse
+  scope: 'https://www.googleapis.com/auth/spreadsheets',
+  callback: (tokenResponse) => {
+    if (tokenResponse && tokenResponse.access_token) {
+      syncToSheets(tokenResponse.access_token, sheetConfig, rowData);
+    }
+  }
 });
 
-function handleCredentialResponse(response) {
-  const accessToken = response.credential;
-  syncToSheets(accessToken, sheetConfig, rowData);
-}
+// Request access
+client.requestAccessToken();
+
+// 2. Optional: One Tap for Identity (ID Token only)
+google.accounts.id.initialize({
+  client_id: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com',
+  callback: (response) => {
+    console.log("ID Token:", response.credential); 
+    // Note: Use the Access Token flow above for syncing
+  }
+});
 ```
+
 **Note:** Google One Tap returns an ID token, not an OAuth access token. To access the Sheets API, use Google Identity Services OAuth token flow (initTokenClient) instead.
 
 #### Option 3: PWA (Progressive Web App)
@@ -493,7 +514,7 @@ Supports unlimited columns (A-Z, AA-ZZ, AAA-ZZZ, etc.) thanks to the [getColumnL
 
 ## 🤝 Contributing
 
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions welcome! See [contributing.md](contributing.md).
 
 ### Adding Domain Adapters
 
@@ -525,8 +546,8 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## 📞 Support
 
-- **Issues:** [GitHub Issues](https://github.com/yourusername/google-sheets-sync/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/yourusername/google-sheets-sync/discussions)
+- **Issues:** [GitHub Issues](https://github.com/balajiasapu/google_sheets_sync/issues)
+- **Discussions:** [GitHub Discussions](https://github.com/balajiasapu/google_sheets_sync/discussions)
 
 ---
 
