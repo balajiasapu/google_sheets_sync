@@ -4,29 +4,33 @@
  * Domain-Agnostic: Works with any data structure (nutrition, expenses, fitness, etc.)
  * 
  * Security:
- * - Validates OAuth access token with Google
+ * - Validates OAuth access token with Google (RFC 9700 compliant)
  * - Uses client_secret from environment variables (NOT in client code)
  * - Acts as pass-through (doesn't store user data)
- * 
- * Privacy:
- * - Only receives minimal data as defined by client
- * - Writes to user's own Google Sheet
- * - No data retention on server
+ * - Stateful Rate Limiting via Vercel KV
+ * - Supports Refresh Tokens for seamless UX
  */
 
 const { google } = require('googleapis');
+const { kv } = require('@vercel/kv');
 
-// Rate limiting (simple in-memory store for demo; use Redis in production)
-// NOTE: This in-memory store is "best effort" for serverless environments.
-// Vercel functions are stateless and may spin up multiple instances.
-// For strict enforcement, use an external store like Vercel KV or Redis.
-const rateLimitStore = new Map();
+// Rate limiting configuration
 const RATE_LIMIT = process.env.RATE_LIMIT_PER_HOUR || 100; // requests per hour per user
-const RATE_WINDOW = 60 * 60 * 1000; // 1 hour in ms
+const RATE_WINDOW = 3600; // 1 hour in seconds for KV expiry
 
 // Mock mode for development (NEVER use in production)
 const MOCK_MODE = process.env.MOCK_MODE === 'true';
 
+if (MOCK_MODE) {
+    console.warn('🚨 MOCK_MODE ENABLED - DO NOT USE IN PRODUCTION 🚨');
+    if (process.env.NODE_ENV === 'production') {
+        throw new Error('MOCK_MODE must be false in production environments');
+    }
+}
+
+/**
+ * Main Lambda Handler
+ */
 module.exports = async (req, res) => {
     // CORS headers
     res.setHeader('Access-Control-Allow-Origin', process.env.ALLOWED_ORIGIN || '*');
@@ -44,9 +48,9 @@ module.exports = async (req, res) => {
     }
 
     try {
-        const { accessToken, sheetConfig, rowData } = req.body;
+        const { accessToken, refreshToken, sheetConfig, rowData } = req.body;
 
-        // Validate input
+        // Validate basic input
         if (!accessToken || !sheetConfig || !rowData) {
             return res.status(400).json({
                 success: false,
@@ -75,8 +79,7 @@ module.exports = async (req, res) => {
 
         // Validate row length matches headers
         const headerCount = sheetConfig.headers.length;
-        const invalidRows = rowData.filter(row => row.length !== headerCount);
-        if (invalidRows.length > 0) {
+        if (rowData.some(row => row.length !== headerCount)) {
             return res.status(400).json({
                 success: false,
                 error: 'invalid_schema',
@@ -84,89 +87,129 @@ module.exports = async (req, res) => {
             });
         }
 
-        // Step 1: Validate access token with Google (skip in mock mode)
-        let tokenInfo;
-        if (MOCK_MODE) {
-            console.warn('[Sync Proxy] MOCK MODE - Skipping token validation');
-            tokenInfo = { sub: 'mock_user_123' };
-        } else {
-            tokenInfo = await validateAccessToken(accessToken);
+        /**
+         * Orchestrate the sync process with optional token refresh retry
+         */
+        async function attemptSync(activeToken, isRetry = false) {
+            // Step 1: Validate access token (skip in mock mode)
+            let tokenInfo;
+            if (MOCK_MODE) {
+                tokenInfo = { sub: 'mock_user_123' };
+            } else {
+                tokenInfo = await validateAccessToken(activeToken);
+            }
+
+            // Step 2: Handle Invalid/Expired Token
             if (!tokenInfo) {
+                // If we have a refresh token and haven't retried yet, try to refresh
+                if (refreshToken && !isRetry) {
+                    console.log('[Sync Proxy] Token invalid, attempting refresh...');
+                    const newToken = await refreshAccessToken(refreshToken);
+                    if (newToken) {
+                        return await attemptSync(newToken, true);
+                    }
+                }
+
                 return res.status(401).json({
                     success: false,
                     error: 'invalid_token',
-                    message: 'Invalid or expired access token'
+                    message: 'Access token is invalid or expired. Re-authentication required.'
                 });
             }
-        }
 
-        // Step 2: Rate limiting (prevent abuse)
-        const userId = tokenInfo.sub; // Google user ID
-        if (!checkRateLimit(userId)) {
-            return res.status(429).json({
-                success: false,
-                error: 'rate_limit_exceeded',
-                message: 'Too many requests. Please try again later.'
+            // Step 3: Rate limiting (Stateless check via Vercel KV)
+            const userId = tokenInfo.sub;
+            const isAllowed = await checkRateLimit(userId);
+            if (!isAllowed) {
+                return res.status(429).json({
+                    success: false,
+                    error: 'rate_limit_exceeded',
+                    message: 'Hourly rate limit exceeded. Please try again later.'
+                });
+            }
+
+            // Step 4: Execute Google Sheets Interaction
+            const sheets = google.sheets({ version: 'v4' });
+            const auth = new google.auth.OAuth2();
+            auth.setCredentials({ access_token: activeToken });
+
+            // Find or create spreadsheet
+            const spreadsheetId = await findOrCreateSpreadsheet(sheets, auth, sheetConfig, userId);
+
+            // Append data
+            const result = await appendData(sheets, auth, spreadsheetId, sheetConfig, rowData);
+
+            // Step 5: Success Response
+            return res.status(200).json({
+                success: true,
+                message: 'Data synced successfully',
+                rowsAdded: result.rowsAdded,
+                spreadsheetId: spreadsheetId,
+                tokenRefreshed: isRetry // Inform client if a refresh occurred
             });
         }
 
-        // Step 3: Initialize Google Sheets API with user's token
-        const sheets = google.sheets({ version: 'v4' });
-        const auth = new google.auth.OAuth2();
-        auth.setCredentials({ access_token: accessToken });
-
-        // Step 4: Find or create spreadsheet with configured name
-        const spreadsheetId = await findOrCreateSpreadsheet(sheets, auth, sheetConfig, userId);
-
-        // Step 5: Append data rows
-        const result = await appendData(sheets, auth, spreadsheetId, sheetConfig, rowData);
-
-        // Step 6: Return success
-        return res.status(200).json({
-            success: true,
-            message: 'Data synced successfully',
-            rowsAdded: result.rowsAdded,
-            spreadsheetId: spreadsheetId
-        });
+        return await attemptSync(accessToken);
 
     } catch (error) {
-        console.error('[Sync Proxy] Error:', error);
+        console.error('[Sync Proxy] Fatal Error:', error);
 
-        // Handle specific errors
-        if (error.code === 401 || error.code === 403) {
-            return res.status(401).json({
+        // Handle specific header mismatch error
+        if (error.message.includes('Header mismatch')) {
+            return res.status(400).json({
                 success: false,
-                error: 'token_expired',
-                message: 'Token expired. Please sign in again.'
+                error: 'header_mismatch',
+                message: error.message
             });
         }
 
         return res.status(500).json({
             success: false,
             error: 'server_error',
-            message: 'Internal server error'
+            message: 'Internal server error occurred while syncing'
         });
     }
 };
 
 /**
- * Validate access token with Google's tokeninfo endpoint
- * @param {string} accessToken - OAuth access token
- * @returns {Promise<Object|null>} - Token info or null if invalid
+ * Validate access token with Google's tokeninfo endpoint (RFC 9700 compliant)
  */
 async function validateAccessToken(accessToken) {
     try {
-        const response = await fetch(`https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${accessToken}`);
+        const response = await fetch('https://www.googleapis.com/oauth2/v3/tokeninfo', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `access_token=${encodeURIComponent(accessToken)}`
+        });
 
-        if (!response.ok) {
-            return null;
-        }
+        if (!response.ok) return null;
 
         const tokenInfo = await response.json();
 
-        // Verify token is for our app (optional but recommended)
+        // Audience check
         if (process.env.GOOGLE_CLIENT_ID && tokenInfo.aud !== process.env.GOOGLE_CLIENT_ID) {
-            console.error('[Sync Proxy] Token audience mismatch');
+            console.error('[Sync Proxy] Audience mismatch');
+            return null;
+        }
+
+        // Expiration check
+        if (tokenInfo.exp < Math.floor(Date.now() / 1000)) return null;
+
+        // Scope check (Strict validation)
+        const validScopes = [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive.file'
+        ];
+        const hasValidScope = tokenInfo.scope?.split(' ').some(scope =>
+            validScopes.includes(scope)
+        );
+        if (!hasValidScope) {
+            console.error('[Sync Proxy] Token missing required strict scope');
+            return null;
+        }
+
+        // Sender constraint (azp)
+        if (tokenInfo.azp && process.env.GOOGLE_CLIENT_ID && tokenInfo.azp !== process.env.GOOGLE_CLIENT_ID) {
             return null;
         }
 
@@ -178,44 +221,62 @@ async function validateAccessToken(accessToken) {
 }
 
 /**
- * Check rate limit for user
- * @param {string} userId - Google user ID
- * @returns {boolean} - True if within limit
+ * Refresh expired access token using refresh token
  */
-function checkRateLimit(userId) {
-    const now = Date.now();
-    const userLimit = rateLimitStore.get(userId) || { count: 0, resetTime: now + RATE_WINDOW };
+async function refreshAccessToken(refreshToken) {
+    try {
+        const response = await fetch('https://oauth2.googleapis.com/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                client_id: process.env.GOOGLE_CLIENT_ID,
+                client_secret: process.env.GOOGLE_CLIENT_SECRET,
+                refresh_token: refreshToken,
+                grant_type: 'refresh_token'
+            }).toString()
+        });
 
-    // Reset if window expired
-    if (now > userLimit.resetTime) {
-        userLimit.count = 0;
-        userLimit.resetTime = now + RATE_WINDOW;
+        if (!response.ok) return null;
+
+        const data = await response.json();
+        return data.access_token;
+    } catch (error) {
+        console.error('[Sync Proxy] Token refresh failed:', error);
+        return null;
     }
-
-    // Check limit
-    if (userLimit.count >= RATE_LIMIT) {
-        return false;
-    }
-
-    // Increment
-    userLimit.count++;
-    rateLimitStore.set(userId, userLimit);
-    return true;
 }
 
 /**
- * Find or create spreadsheet in user's Drive (generic, domain-agnostic)
- * @param {Object} sheets - Google Sheets API instance
- * @param {Object} auth - OAuth2 client
- * @param {Object} sheetConfig - Configuration with sheetName and headers
- * @param {string} userId - Google user ID (for logging)
- * @returns {Promise<string>} - Spreadsheet ID
+ * Stateful Rate Limit check via Vercel KV
+ */
+async function checkRateLimit(userId) {
+    try {
+        const key = `ratelimit:${userId}`;
+        const current = await kv.get(key) || 0;
+
+        if (current >= RATE_LIMIT) {
+            return false;
+        }
+
+        await kv.incr(key);
+        if (current === 0) {
+            await kv.expire(key, RATE_WINDOW);
+        }
+
+        return true;
+    } catch (error) {
+        console.error('[Sync Proxy] Rate limit store error:', error);
+        return true; // Fail open to not block users on database issues
+    }
+}
+
+/**
+ * Find or create spreadsheet in user's Drive
  */
 async function findOrCreateSpreadsheet(sheets, auth, sheetConfig, userId) {
     const drive = google.drive({ version: 'v3', auth });
 
     try {
-        // Search for existing spreadsheet
         const searchResponse = await drive.files.list({
             q: `name='${sheetConfig.sheetName}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`,
             fields: 'files(id, name)',
@@ -224,62 +285,42 @@ async function findOrCreateSpreadsheet(sheets, auth, sheetConfig, userId) {
 
         if (searchResponse.data.files && searchResponse.data.files.length > 0) {
             const spreadsheetId = searchResponse.data.files[0].id;
-            console.log('[Sync Proxy] Found existing spreadsheet:', spreadsheetId);
-
-            // Ensure sheet has correct headers
             await ensureHeaders(sheets, auth, spreadsheetId, sheetConfig);
-
             return spreadsheetId;
         }
 
-        // Create new spreadsheet with headers
-        const headerRow = sheetConfig.headers.map(header => ({
-            userEnteredValue: { stringValue: header }
-        }));
-
+        // Create new
         const createResponse = await sheets.spreadsheets.create({
             auth,
             requestBody: {
-                properties: {
-                    title: sheetConfig.sheetName
-                },
+                properties: { title: sheetConfig.sheetName },
                 sheets: [{
-                    properties: {
-                        title: 'Sheet1'
-                    },
+                    properties: { title: 'Sheet1' },
                     data: [{
                         startRow: 0,
                         startColumn: 0,
                         rowData: [{
-                            values: headerRow
+                            values: sheetConfig.headers.map(h => ({
+                                userEnteredValue: { stringValue: h }
+                            }))
                         }]
                     }]
                 }]
             }
         });
 
-        console.log('[Sync Proxy] Created new spreadsheet:', createResponse.data.spreadsheetId);
         return createResponse.data.spreadsheetId;
-
     } catch (error) {
-        console.error('[Sync Proxy] Error finding/creating spreadsheet:', error);
+        console.error('[Sync Proxy] Spreadsheet init error:', error);
         throw error;
     }
 }
 
 /**
- * Ensure spreadsheet has correct headers (for existing sheets)
- * @param {Object} sheets - Google Sheets API instance
- * @param {Object} auth - OAuth2 client
- * @param {string} spreadsheetId - Spreadsheet ID
- * @param {Object} sheetConfig - Configuration with headers
- *
- * WARNING: This function will overwrite headers if they don't match.
- * Do not manually reorder columns in Google Sheets; update the client config instead.
+ * Verify headers - Non-destructive approach
  */
 async function ensureHeaders(sheets, auth, spreadsheetId, sheetConfig) {
     try {
-        // Get first row to check headers
         const response = await sheets.spreadsheets.values.get({
             auth,
             spreadsheetId,
@@ -288,74 +329,58 @@ async function ensureHeaders(sheets, auth, spreadsheetId, sheetConfig) {
 
         const existingHeaders = response.data.values ? response.data.values[0] : [];
 
-        // If headers don't match, log warning and update
         if (JSON.stringify(existingHeaders) !== JSON.stringify(sheetConfig.headers)) {
-            console.warn('[Sync Proxy] Header mismatch detected. Existing:', existingHeaders, 'Expected:', sheetConfig.headers);
-            console.warn('[Sync Proxy] Updating headers. Manual column reordering will be overwritten.');
+            console.warn('[Sync Proxy] ⚠️ Header mismatch detected!');
+            console.warn('Expected:', sheetConfig.headers);
+            console.warn('Found:', existingHeaders);
 
-            await sheets.spreadsheets.values.update({
-                auth,
-                spreadsheetId,
-                range: 'Sheet1!A1',
-                valueInputOption: 'USER_ENTERED',
-                requestBody: {
-                    values: [sheetConfig.headers]
-                }
-            });
-            console.log('[Sync Proxy] Headers updated successfully');
+            throw new Error(
+                'Sheet headers do not match configuration. ' +
+                'Please update client sheetConfig.headers to match the spreadsheet ' +
+                'or delete the file in Google Drive to recreate it.'
+            );
         }
     } catch (error) {
-        console.warn('[Sync Proxy] Could not verify/update headers:', error.message);
-        // Non-critical error, continue
+        if (error.message.includes('Header mismatch')) throw error;
+        console.warn('[Sync Proxy] Could not verify headers:', error.message);
     }
 }
 
 /**
- * Append data rows to spreadsheet (generic, domain-agnostic)
- * @param {Object} sheets - Google Sheets API instance
- * @param {Object} auth - OAuth2 client
- * @param {string} spreadsheetId - Spreadsheet ID
- * @param {Object} sheetConfig - Configuration with sheetName
- * @param {Array} rowData - Array of arrays to append
- * @returns {Promise<Object>} - { rowsAdded: number }
+ * Append data rows
  */
 async function appendData(sheets, auth, spreadsheetId, sheetConfig, rowData) {
     try {
-        // Determine range based on number of columns
         const columnCount = sheetConfig.headers.length;
-        const columnLetter = getColumnLetter(columnCount); // Handles 1-26 (A-Z) and 27+ (AA, AB, etc.)
+        const columnLetter = getColumnLetter(columnCount);
         const range = `Sheet1!A:${columnLetter}`;
 
-        const response = await sheets.spreadsheets.values.append({
+        await sheets.spreadsheets.values.append({
             auth,
             spreadsheetId,
             range: range,
             valueInputOption: 'USER_ENTERED',
-            requestBody: {
-                values: rowData
-            }
+            insertDataOption: 'INSERT_ROWS', // Ensure rows are inserted correctly
+            requestBody: { values: rowData }
         });
 
-        console.log('[Sync Proxy] Appended', rowData.length, 'rows');
+        console.log(`[Sync Proxy] Successfully appended ${rowData.length} rows`);
         return { rowsAdded: rowData.length };
     } catch (error) {
         console.error('[Sync Proxy] Error appending data:', error);
-        throw error;
+        throw new Error(`Failed to append data: ${error.message}`);
     }
 }
 
 /**
  * Convert column index to Excel-style column letter
- * Handles columns beyond Z (e.g., 27 -> AA, 28 -> AB)
- * @param {number} colIndex - Column index (1-based)
- * @returns {string} - Column letter (A, B, ..., Z, AA, AB, ...)
  */
 function getColumnLetter(colIndex) {
-    let letter = '';
+    let col = '';
     while (colIndex > 0) {
-        let temp = (colIndex - 1) % 26;
-        letter = String.fromCharCode(temp + 65) + letter;
-        colIndex = Math.floor((colIndex - temp - 1) / 26);
+        colIndex--; // Convert to 0-based
+        col = String.fromCharCode((colIndex % 26) + 65) + col;
+        colIndex = Math.floor(colIndex / 26);
     }
-    return letter;
+    return col;
 }
