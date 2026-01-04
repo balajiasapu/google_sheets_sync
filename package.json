@@ -29,6 +29,7 @@
     },
     "homepage": "https://github.com/balajiasapu/google_sheets_sync#readme",
     "dependencies": {
+        "@vercel/kv": "^1.0.1",
         "googleapis": "^134.0.0"
     },
     "devDependencies": {
